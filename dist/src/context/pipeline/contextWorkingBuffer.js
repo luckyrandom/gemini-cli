@@ -1,0 +1,197 @@
+/**
+ * @license
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: Apache-2.0
+ */
+export class ContextWorkingBufferImpl {
+    // The current active graph
+    nodes;
+    // The AOT pre-calculated provenance index (Current ID -> Pristine IDs)
+    provenanceMap;
+    // The original immutable pristine nodes mapping
+    pristineNodesMap;
+    // The historical linked list of changes
+    history;
+    constructor(nodes, pristineNodesMap, provenanceMap, history) {
+        this.nodes = nodes;
+        this.pristineNodesMap = pristineNodesMap;
+        this.provenanceMap = provenanceMap;
+        this.history = history;
+    }
+    /**
+     * Initializes a brand new ContextWorkingBuffer from a pristine graph.
+     * Every node's provenance points to itself.
+     */
+    static initialize(pristineNodes) {
+        const pristineMap = new Map();
+        const initialProvenance = new Map();
+        for (const node of pristineNodes) {
+            pristineMap.set(node.id, node);
+            initialProvenance.set(node.id, new Set([node.id]));
+        }
+        return new ContextWorkingBufferImpl(pristineNodes, pristineMap, initialProvenance, []);
+    }
+    /**
+     * Appends newly observed pristine nodes (e.g. from a user message) to the working buffer.
+     * Ensures they are tracked in the pristine map and point to themselves in provenance.
+     */
+    appendPristineNodes(newNodes) {
+        if (newNodes.length === 0)
+            return this;
+        const newPristineMap = new Map(this.pristineNodesMap);
+        const newProvenanceMap = new Map(this.provenanceMap);
+        for (const node of newNodes) {
+            newPristineMap.set(node.id, node);
+            newProvenanceMap.set(node.id, new Set([node.id]));
+        }
+        return new ContextWorkingBufferImpl([...this.nodes, ...newNodes], newPristineMap, newProvenanceMap, [...this.history]);
+    }
+    /**
+     * Generates an entirely new buffer instance by calculating the delta between the processor's input and output.
+     */
+    applyProcessorResult(processorId, inputTargets, outputNodes) {
+        const outputIds = new Set(outputNodes.map((n) => n.id));
+        const inputIds = new Set(inputTargets.map((n) => n.id));
+        // Calculate diffs
+        const removedIds = inputTargets
+            .filter((n) => !outputIds.has(n.id))
+            .map((n) => n.id);
+        const addedNodes = outputNodes.filter((n) => !inputIds.has(n.id));
+        // Create mutation record
+        const mutation = {
+            processorId,
+            timestamp: Date.now(),
+            removedIds,
+            addedNodes,
+        };
+        // Calculate new node array
+        const removedSet = new Set(removedIds);
+        const retainedNodes = this.nodes.filter((n) => !removedSet.has(n.id));
+        const newGraph = [...retainedNodes];
+        // We append the output nodes in the same general position if possible,
+        // but in a complex graph we just ensure they exist. V2 graph uses timestamps for order.
+        // For simplicity, we just push added nodes to the end of the retained array
+        newGraph.push(...addedNodes);
+        // Calculate new provenance map
+        const newProvenanceMap = new Map(this.provenanceMap);
+        let finalPristineMap = this.pristineNodesMap;
+        // Map the new synthetic nodes back to their pristine roots
+        for (const added of addedNodes) {
+            const roots = new Set();
+            // 1:1 Replacement (e.g. Masked Node)
+            if (added.replacesId) {
+                const inheritedRoots = this.provenanceMap.get(added.replacesId);
+                if (inheritedRoots) {
+                    for (const rootId of inheritedRoots)
+                        roots.add(rootId);
+                }
+            }
+            // N:1 Abstraction (e.g. Rolling Summary)
+            if (added.abstractsIds) {
+                for (const abstractId of added.abstractsIds) {
+                    const inheritedRoots = this.provenanceMap.get(abstractId);
+                    if (inheritedRoots) {
+                        for (const rootId of inheritedRoots)
+                            roots.add(rootId);
+                    }
+                }
+            }
+            // If it has no links back to the original graph, it is its own root
+            // (e.g., a system-injected instruction)
+            if (roots.size === 0) {
+                roots.add(added.id);
+                // It acts as a net-new pristine root.
+                if (!finalPristineMap.has(added.id)) {
+                    const mutableMap = new Map(finalPristineMap);
+                    mutableMap.set(added.id, added);
+                    finalPristineMap = mutableMap;
+                }
+            }
+            newProvenanceMap.set(added.id, roots);
+        }
+        // GC the Caches
+        // We only want to keep provenance and pristine entries that are reachable
+        // from the nodes in 'newGraph'.
+        const reachablePristineIds = new Set();
+        const reachableCurrentIds = new Set();
+        for (const node of newGraph) {
+            reachableCurrentIds.add(node.id);
+            const roots = newProvenanceMap.get(node.id);
+            if (roots) {
+                for (const root of roots) {
+                    reachablePristineIds.add(root);
+                }
+            }
+        }
+        // Prune Provenance Map
+        for (const [id] of newProvenanceMap) {
+            if (!reachableCurrentIds.has(id)) {
+                newProvenanceMap.delete(id);
+            }
+        }
+        // Prune Pristine Map
+        const prunedPristineMap = new Map();
+        for (const id of reachablePristineIds) {
+            const node = finalPristineMap.get(id);
+            if (node)
+                prunedPristineMap.set(id, node);
+        }
+        finalPristineMap = prunedPristineMap;
+        return new ContextWorkingBufferImpl(newGraph, finalPristineMap, newProvenanceMap, [...this.history, mutation]);
+    }
+    /** Removes nodes from the working buffer that were completely dropped from the upstream pristine history */
+    prunePristineNodes(retainedIds) {
+        const newGraph = this.nodes.filter((n) => retainedIds.has(n.id) || !this.pristineNodesMap.has(n.id));
+        const newProvenanceMap = new Map(this.provenanceMap);
+        const reachablePristineIds = new Set();
+        const reachableCurrentIds = new Set();
+        for (const node of newGraph) {
+            reachableCurrentIds.add(node.id);
+            const roots = newProvenanceMap.get(node.id);
+            if (roots) {
+                for (const root of roots) {
+                    if (retainedIds.has(root) || !this.pristineNodesMap.has(root)) {
+                        reachablePristineIds.add(root);
+                    }
+                }
+            }
+        }
+        for (const [id] of newProvenanceMap) {
+            if (!reachableCurrentIds.has(id)) {
+                newProvenanceMap.delete(id);
+            }
+        }
+        const prunedPristineMap = new Map();
+        for (const id of reachablePristineIds) {
+            const node = this.pristineNodesMap.get(id);
+            if (node)
+                prunedPristineMap.set(id, node);
+        }
+        return new ContextWorkingBufferImpl(newGraph, prunedPristineMap, newProvenanceMap, [...this.history]);
+    }
+    getPristineNodes(id) {
+        const pristineIds = this.provenanceMap.get(id);
+        if (!pristineIds)
+            return [];
+        return Array.from(pristineIds).map((pid) => this.pristineNodesMap.get(pid));
+    }
+    getAuditLog() {
+        return this.history;
+    }
+    getLineage(id) {
+        const lineage = [];
+        const currentNodesMap = new Map(this.nodes.map((n) => [n.id, n]));
+        let current = currentNodesMap.get(id);
+        while (current) {
+            lineage.push(current);
+            if (current.logicalParentId && current.logicalParentId !== current.id) {
+                current = currentNodesMap.get(current.logicalParentId);
+            }
+            else {
+                break;
+            }
+        }
+        return lineage;
+    }
+}
+//# sourceMappingURL=contextWorkingBuffer.js.map

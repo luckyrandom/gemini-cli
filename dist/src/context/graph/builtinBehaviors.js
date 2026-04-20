@@ -1,0 +1,145 @@
+export const UserPromptBehavior = {
+    type: 'USER_PROMPT',
+    getEstimatableParts(prompt) {
+        const parts = [];
+        for (const sp of prompt.semanticParts) {
+            switch (sp.type) {
+                case 'text':
+                    parts.push({ text: sp.text });
+                    break;
+                case 'inline_data':
+                    parts.push({ inlineData: { mimeType: sp.mimeType, data: sp.data } });
+                    break;
+                case 'file_data':
+                    parts.push({
+                        fileData: { mimeType: sp.mimeType, fileUri: sp.fileUri },
+                    });
+                    break;
+                case 'raw_part':
+                    parts.push(sp.part);
+                    break;
+                default:
+                    break;
+            }
+        }
+        return parts;
+    },
+    serialize(prompt, writer) {
+        const parts = this.getEstimatableParts(prompt);
+        if (parts.length > 0) {
+            writer.flushModelParts();
+            writer.appendContent({ role: 'user', parts });
+        }
+    },
+};
+export const AgentThoughtBehavior = {
+    type: 'AGENT_THOUGHT',
+    getEstimatableParts(thought) {
+        return [{ text: thought.text }];
+    },
+    serialize(thought, writer) {
+        writer.appendModelPart({ text: thought.text });
+    },
+};
+export const ToolExecutionBehavior = {
+    type: 'TOOL_EXECUTION',
+    getEstimatableParts(tool) {
+        return [
+            { functionCall: { id: tool.id, name: tool.toolName, args: tool.intent } },
+            {
+                functionResponse: {
+                    id: tool.id,
+                    name: tool.toolName,
+                    response: typeof tool.observation === 'string'
+                        ? { message: tool.observation }
+                        : tool.observation,
+                },
+            },
+        ];
+    },
+    serialize(tool, writer) {
+        const parts = this.getEstimatableParts(tool);
+        writer.appendModelPart(parts[0]);
+        writer.flushModelParts();
+        writer.appendUserPart(parts[1]);
+    },
+};
+export const MaskedToolBehavior = {
+    type: 'MASKED_TOOL',
+    getEstimatableParts(tool) {
+        return [
+            {
+                functionCall: {
+                    id: tool.id,
+                    name: tool.toolName,
+                    args: tool.intent ?? {},
+                },
+            },
+            {
+                functionResponse: {
+                    id: tool.id,
+                    name: tool.toolName,
+                    response: typeof tool.observation === 'string'
+                        ? { message: tool.observation }
+                        : (tool.observation ?? {}),
+                },
+            },
+        ];
+    },
+    serialize(tool, writer) {
+        const parts = this.getEstimatableParts(tool);
+        writer.appendModelPart(parts[0]);
+        writer.flushModelParts();
+        writer.appendUserPart(parts[1]);
+    },
+};
+export const AgentYieldBehavior = {
+    type: 'AGENT_YIELD',
+    getEstimatableParts(yieldNode) {
+        return [{ text: yieldNode.text }];
+    },
+    serialize(yieldNode, writer) {
+        writer.appendModelPart({ text: yieldNode.text });
+        writer.flushModelParts();
+    },
+};
+export const SystemEventBehavior = {
+    type: 'SYSTEM_EVENT',
+    getEstimatableParts() {
+        return [];
+    },
+    serialize(node, writer) {
+        writer.flushModelParts();
+    },
+};
+export const SnapshotBehavior = {
+    type: 'SNAPSHOT',
+    getEstimatableParts(node) {
+        return [{ text: node.text }];
+    },
+    serialize(node, writer) {
+        writer.flushModelParts();
+        writer.appendUserPart({ text: node.text });
+    },
+};
+export const RollingSummaryBehavior = {
+    type: 'ROLLING_SUMMARY',
+    getEstimatableParts(node) {
+        return [{ text: node.text }];
+    },
+    serialize(node, writer) {
+        writer.flushModelParts();
+        writer.appendUserPart({ text: node.text });
+    },
+};
+export function registerBuiltInBehaviors(registry) {
+    registry.register(UserPromptBehavior);
+    registry.register(AgentThoughtBehavior);
+    registry.register(ToolExecutionBehavior);
+    registry.register(MaskedToolBehavior);
+    registry.register(AgentYieldBehavior);
+    registry.register(SystemEventBehavior);
+    registry.register(SnapshotBehavior);
+    registry.register(RollingSummaryBehavior);
+}
+//# sourceMappingURL=builtinBehaviors.js.map
