@@ -1,0 +1,84 @@
+name: Publish core dist branch
+
+# On every push to a feat/* source branch, rebuild packages/core and
+# force-push the built artifacts (plus vendor/ and package.json) to the
+# matching core-dist/<branch-name-suffix> branch so downstream consumers
+# can depend on it via a `github:` dep spec.
+#
+# Only the forked repo (luckyrandom/gemini-cli) uses this workflow; it
+# is skipped when run on the upstream by the repo-name guard.
+
+on:
+  push:
+    branches:
+      - 'feat/cancel-with-feedback'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.repository == 'luckyrandom/gemini-cli'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages/core
+        run: npm run build --workspace @google/gemini-cli-core
+
+      - name: Compute dist branch name
+        id: branch
+        run: |
+          src="${GITHUB_REF##refs/heads/}"
+          # feat/xyz -> core-dist/xyz ; anything else -> core-dist/<flat>
+          suffix="${src#feat/}"
+          echo "name=core-dist/${suffix}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare dist tree
+        run: |
+          rm -rf /tmp/dist-tree
+          mkdir -p /tmp/dist-tree
+          rsync -a \
+            --exclude node_modules \
+            --exclude '*.log' \
+            --exclude '.DS_Store' \
+            --exclude 'junit.xml' \
+            --exclude 'coverage' \
+            --exclude 'src/**/*.test.ts' \
+            --exclude 'src/**/*.test.tsx' \
+            packages/core/ /tmp/dist-tree/
+          cat > /tmp/dist-tree/.gitignore <<'EOF'
+          node_modules/
+          *.log
+          .DS_Store
+          EOF
+          cat > /tmp/dist-tree/README.md <<'EOF'
+          # @google/gemini-cli-core — dist branch
+
+          Built snapshot of packages/core. Do not commit here; edit the
+          source branch and let CI publish this branch.
+          EOF
+
+      - name: Force-push dist branch
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          cd /tmp/dist-tree
+          git init -q -b "$BRANCH"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git add -A
+          git commit -q -m "build: core dist from ${GITHUB_SHA::7}"
+          git push -f origin "HEAD:refs/heads/${BRANCH}"
