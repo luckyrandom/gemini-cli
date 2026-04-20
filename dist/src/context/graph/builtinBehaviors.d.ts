@@ -1,0 +1,11 @@
+import type { NodeBehavior, NodeBehaviorRegistry } from './behaviorRegistry.js';
+import type { UserPrompt, AgentThought, ToolExecution, MaskedTool, AgentYield, Snapshot, RollingSummary, SystemEvent } from './types.js';
+export declare const UserPromptBehavior: NodeBehavior<UserPrompt>;
+export declare const AgentThoughtBehavior: NodeBehavior<AgentThought>;
+export declare const ToolExecutionBehavior: NodeBehavior<ToolExecution>;
+export declare const MaskedToolBehavior: NodeBehavior<MaskedTool>;
+export declare const AgentYieldBehavior: NodeBehavior<AgentYield>;
+export declare const SystemEventBehavior: NodeBehavior<SystemEvent>;
+export declare const SnapshotBehavior: NodeBehavior<Snapshot>;
+export declare const RollingSummaryBehavior: NodeBehavior<RollingSummary>;
+export declare function registerBuiltInBehaviors(registry: NodeBehaviorRegistry): void;

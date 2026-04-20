@@ -1,0 +1,70 @@
+/**
+ * @license
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: Apache-2.0
+ */
+import type { AgentLoopContext } from '../config/agent-loop-context.js';
+import type { MessageBus } from '../confirmation-bus/message-bus.js';
+import { type ToolCallRequestInfo, type CompletedToolCall } from './types.js';
+import type { EditorType } from '../utils/editor.js';
+export interface SchedulerOptions {
+    context: AgentLoopContext;
+    messageBus?: MessageBus;
+    getPreferredEditor: () => EditorType | undefined;
+    schedulerId: string;
+    subagent?: string;
+    parentCallId?: string;
+    onWaitingForConfirmation?: (waiting: boolean) => void;
+}
+/**
+ * Event-Driven Orchestrator for Tool Execution.
+ * Coordinates execution via state updates and event listening.
+ */
+export declare class Scheduler {
+    private readonly disposeController;
+    private readonly state;
+    private readonly executor;
+    private readonly modifier;
+    private readonly config;
+    private readonly context;
+    private readonly messageBus;
+    private readonly getPreferredEditor;
+    private readonly schedulerId;
+    private readonly subagent?;
+    private readonly parentCallId?;
+    private readonly onWaitingForConfirmation?;
+    private isProcessing;
+    private isCancelling;
+    private readonly requestQueue;
+    constructor(options: SchedulerOptions);
+    dispose(): void;
+    private readonly handleMcpProgress;
+    private readonly handleToolConfirmationRequest;
+    private setupMessageBusListener;
+    /**
+     * Schedules a batch of tool calls.
+     * @returns A promise that resolves with the results of the completed batch.
+     */
+    schedule(request: ToolCallRequestInfo | ToolCallRequestInfo[], signal: AbortSignal): Promise<CompletedToolCall[]>;
+    private _enqueueRequest;
+    cancelAll(): void;
+    get completedCalls(): CompletedToolCall[];
+    private isTerminal;
+    private _startBatch;
+    private _createToolNotFoundErroredToolCall;
+    private _validateAndCreateToolCall;
+    private _processQueue;
+    /**
+     * Processes the next item in the queue.
+     * @returns true if the loop should continue, false if it should terminate.
+     */
+    private _processNextItem;
+    private _isParallelizable;
+    private _processValidatingCall;
+    private _processToolCall;
+    /**
+     * Executes the tool and records the result. Returns true if a new tool call was added.
+     */
+    private _execute;
+    private _processNextInRequestQueue;
+}
